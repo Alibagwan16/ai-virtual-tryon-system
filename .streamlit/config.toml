@@ -7,7 +7,6 @@ textColor = "#e8edf3"
 font = "sans serif"
 
 [server]
-port = 8505
 maxUploadSize = 15
 enableXsrfProtection = true
 enableStaticServing = true
