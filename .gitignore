@@ -1,0 +1,11 @@
+.env
+.streamlit/secrets.toml
+shops.json
+usage.json
+credits.json
+payment_requests.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

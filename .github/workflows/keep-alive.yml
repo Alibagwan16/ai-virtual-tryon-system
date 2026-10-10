@@ -1,0 +1,32 @@
+name: Keep Streamlit app awake
+
+# Streamlit Community Cloud puts apps to sleep after ~12 hours with no
+# traffic, and there's no paid tier to disable this. Streamlit's own team
+# recommends pushing a commit (even an empty one) periodically, since that
+# reliably resets the inactivity timer — an external URL "ping" service is
+# NOT reliable for this. This workflow does that automatically, so nobody
+# has to remember to visit the app or push anything by hand.
+
+on:
+  schedule:
+    # Runs at minute 15 past every 10th hour (00:15, 10:15, 20:15 UTC...).
+    # Comfortably under the 12-hour sleep threshold with margin for GitHub's
+    # scheduling delays (scheduled Actions can be a few minutes late).
+    - cron: "15 */10 * * *"
+  workflow_dispatch: {}  # lets you trigger it manually from the Actions tab too
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push an empty keep-alive commit
+        run: |
+          git config user.name "keep-alive-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keep-alive ping ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+          git push

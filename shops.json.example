@@ -1,0 +1,10 @@
+{
+  "shops": [
+    {
+      "id": "demo_shop",
+      "name": "Demo Cloth House",
+      "password_hash": "REPLACE_ME_USE_manage_shops.py",
+      "daily_limit": 20
+    }
+  ]
+}
