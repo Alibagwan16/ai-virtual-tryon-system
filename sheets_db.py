@@ -1,43 +1,4 @@
-﻿"""
-sheets_db.py
-------------
-A tiny "database" layer backed by a Google Sheet, used by auth.py and
-credits.py instead of (or alongside) local JSON files.
-
-WHY THIS EXISTS: on Streamlit Community Cloud (and similar), the live
-server's local filesystem is NOT persistent across redeploys â€” every time
-you push new code to GitHub, the server is rebuilt fresh from the repo.
-Any data that was only ever written to a local JSON file on the OLD server
-(a shop signing up, a credit purchase, usage counters) is gone after that
-rebuild, because it was never part of the git repo. A Google Sheet lives
-completely outside of GitHub/Streamlit Cloud, so it survives redeploys,
-restarts, and sleep/wake cycles untouched.
-
-Each "table" is one worksheet (tab) in a single Google Sheet. The exact
-tables/headers are defined by the callers (auth.py, credits.py) â€” this
-module only knows how to read/write arbitrary named tables generically.
-
-SAFE BY DEFAULT: every public function here returns None (for reads) or
-False (for writes) if Sheets hasn't been configured yet, or if a request
-to Google fails for any reason (network hiccup, bad credentials, etc).
-Callers are expected to fall back to their OLD local-JSON-file behavior
-in that case â€” so the app works exactly as it did before, right up until
-you finish the one-time Sheets setup (see README.md), and it keeps
-working even if Sheets is briefly unreachable afterwards.
-
-SETUP (see README.md for the full walkthrough with screensh? â€” short
-version):
-    1. Create a Google Cloud service account, enable the Sheets + Drive
-       APIs, download its JSON key.
-    2. Create a Google Sheet, share it (Editor access) with the service
-       account's email address (ends in ...gserviceaccount.com).
-    3. Put the JSON key's contents under [gcp_service_account] in
-       .streamlit/secrets.toml (or GOOGLE_SERVICE_ACCOUNT_JSON in .env),
-       and the sheet's ID (from its URL) in GOOGLE_SHEET_ID in .env.
-    4. (Optional, recommended) run `python migrate_to_sheets.py` once to
-       copy any existing local shops.json/usage.json/credits.json/
-       payment_requests.json data into the new sheet.
-"""
+"""Google Sheets database layer for the AI Virtual Try-On app."""
 
 from __future__ import annotations
 
@@ -51,10 +12,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_cache: Dict[str, tuple] = {}  # table name -> (fetched_at, records)
-_CACHE_TTL_SECONDS = 8  # short enough that admin approvals show up almost
-                         # immediately, long enough to avoid hammering the
-                         # Sheets API on every Streamlit rerun
+_cache: Dict[str, tuple] = {}
+_CACHE_TTL_SECONDS = 8
 
 _client = None
 _sheet = None
@@ -63,214 +22,551 @@ _init_error: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
-# Connection setup
+# Credentials / configuration
 # --------------------------------------------------------------------------
+
 def _get_credentials_info() -> Optional[dict]:
-    """Looks for Google service-account credentials, in order:
-    1. st.secrets["gcp_service_account"] (recommended on Streamlit Cloud).
-    2. GOOGLE_SERVICE_ACCOUNT_JSON env var â€” the full JSON key as one string.
-    3. GOOGLE_SERVICE_ACCOUNT_FILE env var â€” a path to the JSON key file.
-    Returns None if none of these are set."""
+    """Get Google service-account credentials."""
+
+    # Streamlit Cloud secrets
     try:
         import streamlit as st
+
         if "gcp_service_account" in st.secrets:
             return dict(st.secrets["gcp_service_account"])
-    except Exception:  # noqa: BLE001
-        pass
 
+    except Exception as e:
+        logger.warning("Could not read Streamlit secrets: %s", e)
+
+    # Environment variable containing complete JSON
     raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+
     if raw:
         try:
             return json.loads(raw)
-        except Exception:  # noqa: BLE001
-            logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON is set but isn't valid JSON.")
-            return None
+        except Exception as e:
+            logger.warning(
+                "GOOGLE_SERVICE_ACCOUNT_JSON is invalid: %s", e
+            )
 
+    # Environment variable containing JSON file path
     path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+
     if path and os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:  # noqa: BLE001
-            logger.warning("GOOGLE_SERVICE_ACCOUNT_FILE=%s couldn't be read as JSON.", path)
-            return None
+        except Exception as e:
+            logger.warning(
+                "Could not read GOOGLE_SERVICE_ACCOUNT_FILE: %s", e
+            )
 
     return None
 
 
 def _get_sheet_identifier() -> Optional[dict]:
-    """Get Google Sheet ID/name from Streamlit Secrets first, then .env."""
+    """Get Google Sheet ID or name."""
 
+    # Streamlit secrets first
     try:
         import streamlit as st
 
-        sheet_id = str(st.secrets.get("GOOGLE_SHEET_ID", "")).strip()
+        sheet_id = str(
+            st.secrets.get("GOOGLE_SHEET_ID", "")
+        ).strip()
+
         if sheet_id:
-            return {"by": "id", "value": sheet_id}
+            return {
+                "by": "id",
+                "value": sheet_id,
+            }
 
-        sheet_name = str(st.secrets.get("GOOGLE_SHEET_NAME", "")).strip()
+        sheet_name = str(
+            st.secrets.get("GOOGLE_SHEET_NAME", "")
+        ).strip()
+
         if sheet_name:
-            return {"by": "name", "value": sheet_name}
+            return {
+                "by": "name",
+                "value": sheet_name,
+            }
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(
+            "Could not read sheet settings from Streamlit secrets: %s",
+            e,
+        )
 
+    # Environment variables
     sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+
     if sheet_id:
-        return {"by": "id", "value": sheet_id}
+        return {
+            "by": "id",
+            "value": sheet_id,
+        }
 
     sheet_name = os.getenv("GOOGLE_SHEET_NAME", "").strip()
+
     if sheet_name:
-        return {"by": "name", "value": sheet_name}
+        return {
+            "by": "name",
+            "value": sheet_name,
+        }
 
     return None
 
+
 def is_configured() -> bool:
-    """True once both credentials AND a sheet reference are set â€” does NOT
-    verify they actually work (that only happens on first real use)."""
-    return _get_credentials_info() is not None and _get_sheet_identifier() is not None
+    return (
+        _get_credentials_info() is not None
+        and _get_sheet_identifier() is not None
+    )
 
 
 def init_error() -> Optional[str]:
-    """The last connection error message, if any â€” handy for an
-    admin-facing diagnostic line. None if never attempted or if it
-    succeeded."""
     return _init_error
 
 
+# --------------------------------------------------------------------------
+# Google Sheets connection
+# --------------------------------------------------------------------------
+
 def _init() -> bool:
-    """Lazily connects to Google Sheets once per process. Returns True if
-    ready to use, False if not configured or the connection failed (in
-    which case every public function below safely no-ops)."""
-    global _client, _sheet, _init_attempted, _init_error
+    """Connect to Google Sheets."""
+
+    global _client
+    global _sheet
+    global _init_attempted
+    global _init_error
+
     if _sheet is not None:
         return True
+
     if _init_attempted:
-        return False  # already tried and failed earlier this process run
+        return False
+
+    _init_attempted = True
+    _init_error = None
 
     creds_info = _get_credentials_info()
     sheet_ref = _get_sheet_identifier()
+
+    # Configuration check
     if not creds_info or not sheet_ref:
-        _init_attempted = True
-        return False  # not configured yet â€” not an error, just not set up
+        missing = []
+
+        if not creds_info:
+            missing.append("gcp_service_account credentials")
+
+        if not sheet_ref:
+            missing.append("GOOGLE_SHEET_ID or GOOGLE_SHEET_NAME")
+
+        _init_error = (
+            "Google Sheets configuration missing: "
+            + ", ".join(missing)
+        )
+
+        logger.error(_init_error)
+        return False
 
     try:
         import gspread
         from google.oauth2.service_account import Credentials
 
+        # IMPORTANT:
+        # Full Sheets + Drive scopes are required when opening
+        # an existing spreadsheet by ID.
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
         ]
-        creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-        client = gspread.authorize(creds)
-        sheet = (
-            client.open_by_key(sheet_ref["value"])
-            if sheet_ref["by"] == "id"
-            else client.open(sheet_ref["value"])
+
+        credentials = Credentials.from_service_account_info(
+            creds_info,
+            scopes=scopes,
         )
-        _client = client
-        _sheet = sheet
-        _init_attempted = True
+
+        _client = gspread.authorize(credentials)
+
+        # Open spreadsheet
+        if sheet_ref["by"] == "id":
+            _sheet = _client.open_by_key(
+                sheet_ref["value"]
+            )
+        else:
+            _sheet = _client.open(
+                sheet_ref["value"]
+            )
+
+        logger.info(
+            "Google Sheets connected successfully: %s",
+            sheet_ref["value"],
+        )
+
         return True
-    except Exception as e:  # noqa: BLE001
-        _init_error = str(e)
-        _init_attempted = True
-        logger.warning(
-            "Google Sheets storage is configured but couldn't connect (%s) â€” "
-            "falling back to local JSON files for this run.", e,
+
+    except Exception as e:
+        _init_error = (
+            f"{type(e).__name__}: {str(e)}"
         )
+
+        logger.exception(
+            "Google Sheets initialization failed"
+        )
+
+        _client = None
+        _sheet = None
+
         return False
-
-
-def _get_or_create_worksheet(name: str, headers: List[str]):
-    assert _sheet is not None
-    try:
-        ws = _sheet.worksheet(name)
-    except Exception:  # noqa: BLE001
-        ws = _sheet.add_worksheet(title=name, rows=200, cols=max(10, len(headers)))
-        ws.append_row(headers)
-        return ws
-    if not ws.row_values(1):
-        ws.append_row(headers)
-    return ws
-
-
-def _invalidate(table: str) -> None:
-    with _lock:
-        _cache.pop(table, None)
 
 
 # --------------------------------------------------------------------------
-# Public read/write API â€” generic, table-name + headers driven
+# Worksheet handling
 # --------------------------------------------------------------------------
-def get_rows(table: str, headers: List[str], force_refresh: bool = False) -> Optional[List[Dict[str, Any]]]:
-    """Returns every row of `table` as a list of {column: value} dicts, or
-    None if Sheets isn't configured/reachable â€” callers should fall back to
-    their local JSON file in that case. Cached briefly so a page full of
-    Streamlit widgets re-running doesn't re-hit the Sheets API every time."""
+
+def _get_or_create_worksheet(
+    table_name: str,
+    headers: List[str],
+):
+    """Get worksheet or create it if missing."""
+
     if not _init():
         return None
 
-    if not force_refresh:
-        with _lock:
-            cached = _cache.get(table)
-        if cached and (time.time() - cached[0] < _CACHE_TTL_SECONDS):
-            return [dict(r) for r in cached[1]]
+    try:
+        worksheet = _sheet.worksheet(table_name)
+
+    except Exception:
+        # Worksheet doesn't exist -> create it
+        try:
+            worksheet = _sheet.add_worksheet(
+                title=table_name,
+                rows=1000,
+                cols=max(len(headers), 10),
+            )
+
+            worksheet.append_row(
+                headers,
+                value_input_option="USER_ENTERED",
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Could not create worksheet '%s'",
+                table_name,
+            )
+
+            return None
+
+    # If worksheet exists but is empty, add headers
+    try:
+        values = worksheet.get_all_values()
+
+        if not values:
+            worksheet.append_row(
+                headers,
+                value_input_option="USER_ENTERED",
+            )
+
+    except Exception:
+        pass
+
+    return worksheet
+
+
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+
+def _records_from_worksheet(
+    worksheet,
+    headers: List[str],
+) -> List[Dict[str, Any]]:
 
     try:
-        ws = _get_or_create_worksheet(table, headers)
-        records = ws.get_all_records()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Sheets read failed for table %r: %s", table, e)
+        rows = worksheet.get_all_records(
+            expected_headers=headers
+        )
+
+        return [
+            dict(row)
+            for row in rows
+        ]
+
+    except Exception:
+        # Fallback for sheets where headers are not
+        # interpreted correctly by gspread.
+        try:
+            values = worksheet.get_all_values()
+
+            if not values:
+                return []
+
+            actual_headers = values[0]
+
+            records = []
+
+            for row in values[1:]:
+                padded = list(row)
+
+                while len(padded) < len(actual_headers):
+                    padded.append("")
+
+                records.append(
+                    dict(
+                        zip(
+                            actual_headers,
+                            padded,
+                        )
+                    )
+                )
+
+            return records
+
+        except Exception as e:
+            logger.exception(
+                "Could not read worksheet"
+            )
+            return []
+
+
+# --------------------------------------------------------------------------
+# Read
+# --------------------------------------------------------------------------
+
+def get_rows(
+    table_name: str,
+    headers: List[str],
+) -> Optional[List[Dict[str, Any]]]:
+    """Return rows from a Google Sheet table.
+
+    None means Google Sheets is unavailable.
+    [] means the sheet is available but contains no records.
+    """
+
+    if not _init():
         return None
 
-    with _lock:
-        _cache[table] = (time.time(), records)
-    return [dict(r) for r in records]
+    now = time.time()
+
+    cached = _cache.get(table_name)
+
+    if cached:
+        fetched_at, records = cached
+
+        if now - fetched_at < _CACHE_TTL_SECONDS:
+            return records
+
+    worksheet = _get_or_create_worksheet(
+        table_name,
+        headers,
+    )
+
+    if worksheet is None:
+        return None
+
+    try:
+        records = _records_from_worksheet(
+            worksheet,
+            headers,
+        )
+
+        _cache[table_name] = (
+            now,
+            records,
+        )
+
+        return records
+
+    except Exception as e:
+        logger.exception(
+            "Could not read Google Sheet table '%s'",
+            table_name,
+        )
+
+        return None
 
 
-def append_row(table: str, headers: List[str], row: Dict[str, Any]) -> bool:
-    """Appends one new row. Returns True on success, False if Sheets isn't
-    configured/reachable (caller should fall back to its local JSON file)."""
+# --------------------------------------------------------------------------
+# Write
+# --------------------------------------------------------------------------
+
+def append_row(
+    table_name: str,
+    headers: List[str],
+    row: Dict[str, Any],
+) -> bool:
+    """Append one record to a Google Sheet."""
+
     if not _init():
         return False
+
+    worksheet = _get_or_create_worksheet(
+        table_name,
+        headers,
+    )
+
+    if worksheet is None:
+        return False
+
     try:
-        ws = _get_or_create_worksheet(table, headers)
-        ws.append_row([row.get(h, "") for h in headers])
-        _invalidate(table)
+        values = [
+            row.get(header, "")
+            for header in headers
+        ]
+
+        worksheet.append_row(
+            values,
+            value_input_option="USER_ENTERED",
+        )
+
+        # Clear cache so next read sees the new row.
+        _cache.pop(table_name, None)
+
+        logger.info(
+            "Google Sheets row appended successfully: %s",
+            table_name,
+        )
+
         return True
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Sheets append failed for table %r: %s", table, e)
+
+    except Exception as e:
+        logger.exception(
+            "Could not append row to '%s': %s",
+            table_name,
+            e,
+        )
+
         return False
 
 
-def upsert_row(table: str, headers: List[str], match: Dict[str, Any], updates: Dict[str, Any]) -> bool:
-    """Finds the first row where EVERY column in `match` equals its given
-    value, and merges `updates` into it; appends a brand-new row
-    (match + updates) if no row matched. Returns True on success, False if
-    Sheets isn't configured/reachable."""
+# --------------------------------------------------------------------------
+# Update / upsert
+# --------------------------------------------------------------------------
+
+def upsert_row(
+    table_name: str,
+    headers: List[str],
+    match: Dict[str, Any],
+    updates: Dict[str, Any],
+) -> bool:
+    """Update an existing row matching `match`, or append it."""
+
     if not _init():
         return False
+
+    worksheet = _get_or_create_worksheet(
+        table_name,
+        headers,
+    )
+
+    if worksheet is None:
+        return False
+
     try:
-        ws = _get_or_create_worksheet(table, headers)
-        records = ws.get_all_records()
-        row_index = None
-        for i, r in enumerate(records):
-            if all(str(r.get(k, "")) == str(v) for k, v in match.items()):
-                row_index = i + 2  # +1 header row, +1 for 1-indexing
+        values = worksheet.get_all_values()
+
+        if not values:
+            worksheet.append_row(
+                headers,
+                value_input_option="USER_ENTERED",
+            )
+            values = [headers]
+
+        actual_headers = values[0]
+
+        # Find matching row
+        match_row_number = None
+
+        for row_number, row_values in enumerate(
+            values[1:],
+            start=2,
+        ):
+            row_dict = {}
+
+            for index, header in enumerate(actual_headers):
+                row_dict[header] = (
+                    row_values[index]
+                    if index < len(row_values)
+                    else ""
+                )
+
+            matched = True
+
+            for key, expected in match.items():
+                if str(row_dict.get(key, "")) != str(expected):
+                    matched = False
+                    break
+
+            if matched:
+                match_row_number = row_number
                 break
-        if row_index is None:
+
+        if match_row_number is None:
             new_row = dict(match)
             new_row.update(updates)
-            ws.append_row([new_row.get(h, "") for h in headers])
+
+            worksheet.append_row(
+                [
+                    new_row.get(header, "")
+                    for header in headers
+                ],
+                value_input_option="USER_ENTERED",
+            )
+
         else:
-            current = dict(records[row_index - 2])
-            current.update(updates)
-            ws.update(f"A{row_index}", [[current.get(h, "") for h in headers]])
-        _invalidate(table)
+            current_values = list(
+                values[match_row_number - 1]
+            )
+
+            while len(current_values) < len(headers):
+                current_values.append("")
+
+            header_indexes = {
+                header: index
+                for index, header in enumerate(headers)
+            }
+
+            for key, value in updates.items():
+                if key in header_indexes:
+                    current_values[
+                        header_indexes[key]
+                    ] = value
+
+            worksheet.update(
+                f"A{match_row_number}:{_column_letter(len(headers))}{match_row_number}",
+                [current_values[:len(headers)]],
+                value_input_option="USER_ENTERED",
+            )
+
+        _cache.pop(table_name, None)
+
         return True
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Sheets upsert failed for table %r: %s", table, e)
+
+    except Exception as e:
+        logger.exception(
+            "Could not upsert row in '%s': %s",
+            table_name,
+            e,
+        )
+
         return False
 
+
+def _column_letter(number: int) -> str:
+    """Convert 1 -> A, 2 -> B, ..."""
+
+    result = ""
+
+    while number:
+        number, remainder = divmod(
+            number - 1,
+            26,
+        )
+
+        result = chr(
+            65 + remainder
+        ) + result
+
+    return result
