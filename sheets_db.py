@@ -1,11 +1,11 @@
-"""
+﻿"""
 sheets_db.py
 ------------
 A tiny "database" layer backed by a Google Sheet, used by auth.py and
 credits.py instead of (or alongside) local JSON files.
 
 WHY THIS EXISTS: on Streamlit Community Cloud (and similar), the live
-server's local filesystem is NOT persistent across redeploys — every time
+server's local filesystem is NOT persistent across redeploys â€” every time
 you push new code to GitHub, the server is rebuilt fresh from the repo.
 Any data that was only ever written to a local JSON file on the OLD server
 (a shop signing up, a credit purchase, usage counters) is gone after that
@@ -14,18 +14,18 @@ completely outside of GitHub/Streamlit Cloud, so it survives redeploys,
 restarts, and sleep/wake cycles untouched.
 
 Each "table" is one worksheet (tab) in a single Google Sheet. The exact
-tables/headers are defined by the callers (auth.py, credits.py) — this
+tables/headers are defined by the callers (auth.py, credits.py) â€” this
 module only knows how to read/write arbitrary named tables generically.
 
 SAFE BY DEFAULT: every public function here returns None (for reads) or
 False (for writes) if Sheets hasn't been configured yet, or if a request
 to Google fails for any reason (network hiccup, bad credentials, etc).
 Callers are expected to fall back to their OLD local-JSON-file behavior
-in that case — so the app works exactly as it did before, right up until
+in that case â€” so the app works exactly as it did before, right up until
 you finish the one-time Sheets setup (see README.md), and it keeps
 working even if Sheets is briefly unreachable afterwards.
 
-SETUP (see README.md for the full walkthrough with screensh? — short
+SETUP (see README.md for the full walkthrough with screensh? â€” short
 version):
     1. Create a Google Cloud service account, enable the Sheets + Drive
        APIs, download its JSON key.
@@ -68,8 +68,8 @@ _init_error: Optional[str] = None
 def _get_credentials_info() -> Optional[dict]:
     """Looks for Google service-account credentials, in order:
     1. st.secrets["gcp_service_account"] (recommended on Streamlit Cloud).
-    2. GOOGLE_SERVICE_ACCOUNT_JSON env var — the full JSON key as one string.
-    3. GOOGLE_SERVICE_ACCOUNT_FILE env var — a path to the JSON key file.
+    2. GOOGLE_SERVICE_ACCOUNT_JSON env var â€” the full JSON key as one string.
+    3. GOOGLE_SERVICE_ACCOUNT_FILE env var â€” a path to the JSON key file.
     Returns None if none of these are set."""
     try:
         import streamlit as st
@@ -126,13 +126,13 @@ def _get_sheet_identifier() -> Optional[dict]:
     return None
 
 def is_configured() -> bool:
-    """True once both credentials AND a sheet reference are set — does NOT
+    """True once both credentials AND a sheet reference are set â€” does NOT
     verify they actually work (that only happens on first real use)."""
     return _get_credentials_info() is not None and _get_sheet_identifier() is not None
 
 
 def init_error() -> Optional[str]:
-    """The last connection error message, if any — handy for an
+    """The last connection error message, if any â€” handy for an
     admin-facing diagnostic line. None if never attempted or if it
     succeeded."""
     return _init_error
@@ -152,7 +152,7 @@ def _init() -> bool:
     sheet_ref = _get_sheet_identifier()
     if not creds_info or not sheet_ref:
         _init_attempted = True
-        return False  # not configured yet — not an error, just not set up
+        return False  # not configured yet â€” not an error, just not set up
 
     try:
         import gspread
@@ -160,7 +160,7 @@ def _init() -> bool:
 
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive",
         ]
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
         client = gspread.authorize(creds)
@@ -177,7 +177,7 @@ def _init() -> bool:
         _init_error = str(e)
         _init_attempted = True
         logger.warning(
-            "Google Sheets storage is configured but couldn't connect (%s) — "
+            "Google Sheets storage is configured but couldn't connect (%s) â€” "
             "falling back to local JSON files for this run.", e,
         )
         return False
@@ -202,11 +202,11 @@ def _invalidate(table: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Public read/write API — generic, table-name + headers driven
+# Public read/write API â€” generic, table-name + headers driven
 # --------------------------------------------------------------------------
 def get_rows(table: str, headers: List[str], force_refresh: bool = False) -> Optional[List[Dict[str, Any]]]:
     """Returns every row of `table` as a list of {column: value} dicts, or
-    None if Sheets isn't configured/reachable — callers should fall back to
+    None if Sheets isn't configured/reachable â€” callers should fall back to
     their local JSON file in that case. Cached briefly so a page full of
     Streamlit widgets re-running doesn't re-hit the Sheets API every time."""
     if not _init():
@@ -273,3 +273,4 @@ def upsert_row(table: str, headers: List[str], match: Dict[str, Any], updates: D
     except Exception as e:  # noqa: BLE001
         logger.warning("Sheets upsert failed for table %r: %s", table, e)
         return False
+
