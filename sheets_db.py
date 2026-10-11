@@ -99,16 +99,31 @@ def _get_credentials_info() -> Optional[dict]:
 
 
 def _get_sheet_identifier() -> Optional[dict]:
-    """Returns {'by': 'id'|'name', 'value': ...} for which sheet to open,
-    or None if neither GOOGLE_SHEET_ID nor GOOGLE_SHEET_NAME is set."""
+    """Get Google Sheet ID/name from Streamlit Secrets first, then .env."""
+
+    try:
+        import streamlit as st
+
+        sheet_id = str(st.secrets.get("GOOGLE_SHEET_ID", "")).strip()
+        if sheet_id:
+            return {"by": "id", "value": sheet_id}
+
+        sheet_name = str(st.secrets.get("GOOGLE_SHEET_NAME", "")).strip()
+        if sheet_name:
+            return {"by": "name", "value": sheet_name}
+
+    except Exception:
+        pass
+
     sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
     if sheet_id:
         return {"by": "id", "value": sheet_id}
+
     sheet_name = os.getenv("GOOGLE_SHEET_NAME", "").strip()
     if sheet_name:
         return {"by": "name", "value": sheet_name}
-    return None
 
+    return None
 
 def is_configured() -> bool:
     """True once both credentials AND a sheet reference are set — does NOT
