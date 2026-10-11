@@ -36,29 +36,46 @@ def _get_credentials_info() -> Optional[dict]:
             return dict(st.secrets["gcp_service_account"])
 
     except Exception as e:
-        logger.warning("Could not read Streamlit secrets: %s", e)
+        logger.warning(
+            "Could not read Streamlit secrets: %s",
+            e,
+        )
 
     # Environment variable containing complete JSON
-    raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    raw = os.getenv(
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "",
+    ).strip()
 
     if raw:
         try:
             return json.loads(raw)
+
         except Exception as e:
             logger.warning(
-                "GOOGLE_SERVICE_ACCOUNT_JSON is invalid: %s", e
+                "GOOGLE_SERVICE_ACCOUNT_JSON is invalid: %s",
+                e,
             )
 
     # Environment variable containing JSON file path
-    path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+    path = os.getenv(
+        "GOOGLE_SERVICE_ACCOUNT_FILE",
+        "",
+    ).strip()
 
     if path and os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(
+                path,
+                "r",
+                encoding="utf-8",
+            ) as f:
                 return json.load(f)
+
         except Exception as e:
             logger.warning(
-                "Could not read GOOGLE_SERVICE_ACCOUNT_FILE: %s", e
+                "Could not read GOOGLE_SERVICE_ACCOUNT_FILE: %s",
+                e,
             )
 
     return None
@@ -67,29 +84,37 @@ def _get_credentials_info() -> Optional[dict]:
 def _get_sheet_identifier() -> Optional[dict]:
     """Get Google Sheet ID or name."""
 
-    # Streamlit secrets first
+    # ------------------------------------------------------------------
+    # Streamlit Cloud secrets
+    # ------------------------------------------------------------------
     try:
         import streamlit as st
 
-        sheet_id = str(
-            st.secrets.get("GOOGLE_SHEET_ID", "")
-        ).strip()
+        # IMPORTANT:
+        # GOOGLE_SHEET_ID is a ROOT-LEVEL Streamlit secret.
+        # It is NOT inside [gcp_service_account].
+        if "GOOGLE_SHEET_ID" in st.secrets:
+            sheet_id = str(
+                st.secrets["GOOGLE_SHEET_ID"]
+            ).strip()
 
-        if sheet_id:
-            return {
-                "by": "id",
-                "value": sheet_id,
-            }
+            if sheet_id:
+                return {
+                    "by": "id",
+                    "value": sheet_id,
+                }
 
-        sheet_name = str(
-            st.secrets.get("GOOGLE_SHEET_NAME", "")
-        ).strip()
+        # Optional spreadsheet name
+        if "GOOGLE_SHEET_NAME" in st.secrets:
+            sheet_name = str(
+                st.secrets["GOOGLE_SHEET_NAME"]
+            ).strip()
 
-        if sheet_name:
-            return {
-                "by": "name",
-                "value": sheet_name,
-            }
+            if sheet_name:
+                return {
+                    "by": "name",
+                    "value": sheet_name,
+                }
 
     except Exception as e:
         logger.warning(
@@ -97,8 +122,13 @@ def _get_sheet_identifier() -> Optional[dict]:
             e,
         )
 
+    # ------------------------------------------------------------------
     # Environment variables
-    sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+    # ------------------------------------------------------------------
+    sheet_id = os.getenv(
+        "GOOGLE_SHEET_ID",
+        "",
+    ).strip()
 
     if sheet_id:
         return {
@@ -106,7 +136,10 @@ def _get_sheet_identifier() -> Optional[dict]:
             "value": sheet_id,
         }
 
-    sheet_name = os.getenv("GOOGLE_SHEET_NAME", "").strip()
+    sheet_name = os.getenv(
+        "GOOGLE_SHEET_NAME",
+        "",
+    ).strip()
 
     if sheet_name:
         return {
@@ -152,15 +185,21 @@ def _init() -> bool:
     creds_info = _get_credentials_info()
     sheet_ref = _get_sheet_identifier()
 
+    # ------------------------------------------------------------------
     # Configuration check
+    # ------------------------------------------------------------------
     if not creds_info or not sheet_ref:
         missing = []
 
         if not creds_info:
-            missing.append("gcp_service_account credentials")
+            missing.append(
+                "gcp_service_account credentials"
+            )
 
         if not sheet_ref:
-            missing.append("GOOGLE_SHEET_ID or GOOGLE_SHEET_NAME")
+            missing.append(
+                "GOOGLE_SHEET_ID or GOOGLE_SHEET_NAME"
+            )
 
         _init_error = (
             "Google Sheets configuration missing: "
@@ -168,13 +207,13 @@ def _init() -> bool:
         )
 
         logger.error(_init_error)
+
         return False
 
     try:
         import gspread
         from google.oauth2.service_account import Credentials
 
-        # IMPORTANT:
         # Full Sheets + Drive scopes are required when opening
         # an existing spreadsheet by ID.
         scopes = [
@@ -189,11 +228,14 @@ def _init() -> bool:
 
         _client = gspread.authorize(credentials)
 
+        # ------------------------------------------------------------------
         # Open spreadsheet
+        # ------------------------------------------------------------------
         if sheet_ref["by"] == "id":
             _sheet = _client.open_by_key(
                 sheet_ref["value"]
             )
+
         else:
             _sheet = _client.open(
                 sheet_ref["value"]
@@ -235,7 +277,9 @@ def _get_or_create_worksheet(
         return None
 
     try:
-        worksheet = _sheet.worksheet(table_name)
+        worksheet = _sheet.worksheet(
+            table_name
+        )
 
     except Exception:
         # Worksheet doesn't exist -> create it
@@ -243,7 +287,10 @@ def _get_or_create_worksheet(
             worksheet = _sheet.add_worksheet(
                 title=table_name,
                 rows=1000,
-                cols=max(len(headers), 10),
+                cols=max(
+                    len(headers),
+                    10,
+                ),
             )
 
             worksheet.append_row(
@@ -251,7 +298,7 @@ def _get_or_create_worksheet(
                 value_input_option="USER_ENTERED",
             )
 
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "Could not create worksheet '%s'",
                 table_name,
@@ -324,10 +371,11 @@ def _records_from_worksheet(
 
             return records
 
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "Could not read worksheet"
             )
+
             return []
 
 
@@ -350,12 +398,17 @@ def get_rows(
 
     now = time.time()
 
-    cached = _cache.get(table_name)
+    cached = _cache.get(
+        table_name
+    )
 
     if cached:
         fetched_at, records = cached
 
-        if now - fetched_at < _CACHE_TTL_SECONDS:
+        if (
+            now - fetched_at
+            < _CACHE_TTL_SECONDS
+        ):
             return records
 
     worksheet = _get_or_create_worksheet(
@@ -379,7 +432,7 @@ def get_rows(
 
         return records
 
-    except Exception as e:
+    except Exception:
         logger.exception(
             "Could not read Google Sheet table '%s'",
             table_name,
@@ -412,7 +465,10 @@ def append_row(
 
     try:
         values = [
-            row.get(header, "")
+            row.get(
+                header,
+                "",
+            )
             for header in headers
         ]
 
@@ -422,7 +478,10 @@ def append_row(
         )
 
         # Clear cache so next read sees the new row.
-        _cache.pop(table_name, None)
+        _cache.pop(
+            table_name,
+            None,
+        )
 
         logger.info(
             "Google Sheets row appended successfully: %s",
@@ -472,11 +531,14 @@ def upsert_row(
                 headers,
                 value_input_option="USER_ENTERED",
             )
+
             values = [headers]
 
         actual_headers = values[0]
 
+        # --------------------------------------------------------------
         # Find matching row
+        # --------------------------------------------------------------
         match_row_number = None
 
         for row_number, row_values in enumerate(
@@ -485,7 +547,9 @@ def upsert_row(
         ):
             row_dict = {}
 
-            for index, header in enumerate(actual_headers):
+            for index, header in enumerate(
+                actual_headers
+            ):
                 row_dict[header] = (
                     row_values[index]
                     if index < len(row_values)
@@ -495,7 +559,12 @@ def upsert_row(
             matched = True
 
             for key, expected in match.items():
-                if str(row_dict.get(key, "")) != str(expected):
+                if str(
+                    row_dict.get(
+                        key,
+                        "",
+                    )
+                ) != str(expected):
                     matched = False
                     break
 
@@ -503,21 +572,32 @@ def upsert_row(
                 match_row_number = row_number
                 break
 
+        # --------------------------------------------------------------
+        # Append new row
+        # --------------------------------------------------------------
         if match_row_number is None:
             new_row = dict(match)
             new_row.update(updates)
 
             worksheet.append_row(
                 [
-                    new_row.get(header, "")
+                    new_row.get(
+                        header,
+                        "",
+                    )
                     for header in headers
                 ],
                 value_input_option="USER_ENTERED",
             )
 
+        # --------------------------------------------------------------
+        # Update existing row
+        # --------------------------------------------------------------
         else:
             current_values = list(
-                values[match_row_number - 1]
+                values[
+                    match_row_number - 1
+                ]
             )
 
             while len(current_values) < len(headers):
@@ -525,7 +605,9 @@ def upsert_row(
 
             header_indexes = {
                 header: index
-                for index, header in enumerate(headers)
+                for index, header in enumerate(
+                    headers
+                )
             }
 
             for key, value in updates.items():
@@ -535,24 +617,36 @@ def upsert_row(
                     ] = value
 
             worksheet.update(
-                f"A{match_row_number}:{_column_letter(len(headers))}{match_row_number}",
-                [current_values[:len(headers)]],
+                f"A{match_row_number}:"
+                f"{_column_letter(len(headers))}"
+                f"{match_row_number}",
+                [
+                    current_values[
+                        :len(headers)
+                    ]
+                ],
                 value_input_option="USER_ENTERED",
             )
 
-        _cache.pop(table_name, None)
+        _cache.pop(
+            table_name,
+            None,
+        )
 
         return True
 
-    except Exception as e:
+    except Exception:
         logger.exception(
-            "Could not upsert row in '%s': %s",
+            "Could not upsert row in '%s'",
             table_name,
-            e,
         )
 
         return False
 
+
+# --------------------------------------------------------------------------
+# Column helper
+# --------------------------------------------------------------------------
 
 def _column_letter(number: int) -> str:
     """Convert 1 -> A, 2 -> B, ..."""
@@ -565,8 +659,9 @@ def _column_letter(number: int) -> str:
             26,
         )
 
-        result = chr(
-            65 + remainder
-        ) + result
+        result = (
+            chr(65 + remainder)
+            + result
+        )
 
     return result
