@@ -518,11 +518,20 @@ for shop in sorted(all_shops, key=lambda s: -usage_today.get(s["id"], 0)):
     cols[3].caption("∞" if limit < 0 else f"limit {limit}")
 
     if cols[4].button(
-        "🗑️ Delete",
-        key=f"delete_shop_{shop['id']}",
-        use_container_width=True,
-    ):
-        st.warning(f"Delete {shop.get('name', shop['id'])}?")
+    "🗑️ Delete",
+    key=f"delete_shop_{shop['id']}",
+    use_container_width=True,
+):
+     deleted = auth.delete_shop(shop["id"])
+     st.write("DELETE RESULT:", deleted)
+
+    if deleted:
+        st.success(
+            f"{shop.get('name', shop['id'])} deleted successfully."
+        )
+        st.rerun()
+    else:
+        st.error("Could not delete this shop.")
 
     if limit >= 0:
         st.progress(
