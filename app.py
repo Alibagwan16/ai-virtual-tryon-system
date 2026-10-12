@@ -505,55 +505,84 @@ if IS_ADMIN:
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    for shop in sorted(all_shops, key=lambda s: -usage_today.get(s["id"], 0)):
-        limit = int(shop.get("daily_limit", 0) or 0)
-        used = usage_today.get(shop["id"], 0)
-        cols = st.columns([2, 2, 1, 1, 1])
 
-cols[0].markdown(f"**{shop.get('name', shop['id'])}**")
-cols[1].caption(shop["id"])
-cols[2].caption(f"{used} used")
-cols[3].caption("∞" if limit < 0 else f"limit {limit}")
+for shop in sorted(all_shops, key=lambda s: -usage_today.get(s["id"], 0)):
+    limit = int(shop.get("daily_limit", 0) or 0)
+    used = usage_today.get(shop["id"], 0)
 
-if cols[4].button(
-    "🗑️ Delete",
-    key=f"delete_shop_{shop['id']}",
-    use_container_width=True,
-):
-    st.warning(f"Delete {shop.get('name', shop['id'])}?")
+    cols = st.columns([2, 2, 1, 1, 1])
+
+    cols[0].markdown(f"**{shop.get('name', shop['id'])}**")
+    cols[1].caption(shop["id"])
+    cols[2].caption(f"{used} used")
+    cols[3].caption("∞" if limit < 0 else f"limit {limit}")
+
+    if cols[4].button(
+        "🗑️ Delete",
+        key=f"delete_shop_{shop['id']}",
+        use_container_width=True,
+    ):
+        st.warning(f"Delete {shop.get('name', shop['id'])}?")
+
     if limit >= 0:
-            st.progress(min(1.0, used / limit) if limit > 0 else 1.0)
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.progress(
+            min(1.0, used / limit) if limit > 0 else 1.0
+        )
+
+st.markdown("</div>", unsafe_allow_html=True)
 
     # ----------------------------------------------------------------
     # Pending credit payment requests — shop paid via UPI QR and submitted
     # their transaction ID; verify the money actually landed in your UPI
     # account, then Approve here to credit their balance (or Reject).
     # ----------------------------------------------------------------
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="card"><h3>💳 Pending Credit Payment Requests</h3>', unsafe_allow_html=True)
-    pending_requests = credits.list_pending_requests()
-    if not pending_requests:
-        st.caption("No pending requests.")
-    else:
-        st.caption(
-            "Check your UPI app / bank statement for each transaction ID below before "
-            "approving — approving adds the credits immediately."
+# ----------------------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(
+    '<div class="card"><h3>💳 Pending Credit Payment Requests</h3>',
+    unsafe_allow_html=True,
+)
+
+pending_requests = credits.list_pending_requests()
+
+if not pending_requests:
+    st.caption("No pending requests.")
+else:
+    st.caption(
+        "Check your UPI app / bank statement for each transaction ID below before "
+        "approving — approving adds the credits immediately."
+    )
+
+    for req in pending_requests:
+        r_cols = st.columns([2, 1.4, 1, 1.6, 1, 1])
+
+        r_cols[0].markdown(
+            f"**{req.get('shop_name', req['shop_id'])}**"
         )
-        for req in pending_requests:
-            r_cols = st.columns([2, 1.4, 1, 1.6, 1, 1])
-            r_cols[0].markdown(f"**{req.get('shop_name', req['shop_id'])}**")
-            r_cols[1].caption(req["shop_id"])
-            r_cols[2].caption(f"{req['credits_requested']} cr")
-            r_cols[3].caption(f"₹{req['amount']:.2f} · UTR `{req['utr_reference']}`")
-            if r_cols[4].button("✅ Approve", key=f"approve_{req['id']}", use_container_width=True):
-                credits.approve_request(req["id"])
-                st.rerun()
-            if r_cols[5].button("❌ Reject", key=f"reject_{req['id']}", use_container_width=True):
-                credits.reject_request(req["id"])
-                st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
+        r_cols[1].caption(req["shop_id"])
+        r_cols[2].caption(f"{req['credits_requested']} cr")
+        r_cols[3].caption(
+            f"₹{req['amount']:.2f} · UTR `{req['utr_reference']}`"
+        )
+
+        if r_cols[4].button(
+            "✅ Approve",
+            key=f"approve_{req['id']}",
+            use_container_width=True,
+        ):
+            credits.approve_request(req["id"])
+            st.rerun()
+
+        if r_cols[5].button(
+            "❌ Reject",
+            key=f"reject_{req['id']}",
+            use_container_width=True,
+        ):
+            credits.reject_request(req["id"])
+            st.rerun()
+
+st.markdown("</div>", unsafe_allow_html=True)
+st.stop()
 
 # --------------------------------------------------------------------------
 # Garment types (mirrors the reference "AI trial room" app)
