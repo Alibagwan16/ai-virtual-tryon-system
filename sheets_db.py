@@ -166,103 +166,70 @@ def init_error() -> Optional[str]:
 # --------------------------------------------------------------------------
 
 def _init() -> bool:
-    """Connect to Google Sheets."""
-
-    global _client
-    global _sheet
-    global _init_attempted
-    global _init_error
+    """Connect to Google Sheets. Retries if an earlier attempt failed."""
+    global _client, _sheet, _init_attempted, _init_error
 
     if _sheet is not None:
         return True
 
-    if _init_attempted:
-        return False
-
-    _init_attempted = True
-    _init_error = None
-
     creds_info = _get_credentials_info()
     sheet_ref = _get_sheet_identifier()
 
-    # ------------------------------------------------------------------
-    # Configuration check
-    # ------------------------------------------------------------------
-    if not creds_info or not sheet_ref:
-        missing = []
+    if not creds_info:
+        _init_error = "Google service-account credentials not found."
+        _init_attempted = True
+        print(f"[Google Sheets] {_init_error}", flush=True)
+        return False
 
-        if not creds_info:
-            missing.append(
-                "gcp_service_account credentials"
-            )
-
-        if not sheet_ref:
-            missing.append(
-                "GOOGLE_SHEET_ID or GOOGLE_SHEET_NAME"
-            )
-
-        _init_error = (
-            "Google Sheets configuration missing: "
-            + ", ".join(missing)
-        )
-
-        logger.error(_init_error)
-
+    if not sheet_ref:
+        _init_error = "GOOGLE_SHEET_ID or GOOGLE_SHEET_NAME not found."
+        _init_attempted = True
+        print(f"[Google Sheets] {_init_error}", flush=True)
         return False
 
     try:
         import gspread
         from google.oauth2.service_account import Credentials
 
-        # Full Sheets + Drive scopes are required when opening
-        # an existing spreadsheet by ID.
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
         ]
 
-        credentials = Credentials.from_service_account_info(
+        creds = Credentials.from_service_account_info(
             creds_info,
             scopes=scopes,
         )
 
-        _client = gspread.authorize(credentials)
+        client = gspread.authorize(creds)
 
-        # ------------------------------------------------------------------
-        # Open spreadsheet
-        # ------------------------------------------------------------------
         if sheet_ref["by"] == "id":
-            _sheet = _client.open_by_key(
-                sheet_ref["value"]
-            )
-
+            sheet = client.open_by_key(sheet_ref["value"])
         else:
-            _sheet = _client.open(
-                sheet_ref["value"]
-            )
+            sheet = client.open(sheet_ref["value"])
 
-        logger.info(
-            "Google Sheets connected successfully: %s",
-            sheet_ref["value"],
+        _client = client
+        _sheet = sheet
+        _init_attempted = True
+        _init_error = None
+
+        print(
+            f"[Google Sheets] Connected successfully: {sheet.title}",
+            flush=True,
         )
 
         return True
 
     except Exception as e:
-        _init_error = (
-            f"{type(e).__name__}: {str(e)}"
-        )
+        _init_error = f"{type(e).__name__}: {e}"
+        _init_attempted = True
 
-        logger.exception(
-            "Google Sheets initialization failed"
+        print(
+            f"[Google Sheets] CONNECTION FAILED: {_init_error}",
+            flush=True,
         )
-
-        _client = None
-        _sheet = None
 
         return False
-
-
 # --------------------------------------------------------------------------
 # Worksheet handling
 # --------------------------------------------------------------------------
@@ -498,6 +465,60 @@ def append_row(
         )
 
         return False
+
+def delete_row(
+    table_name: str,
+    key_column: str,
+    key_value: str,
+) -> bool:
+    """Delete the first record matching key_column/key_value."""
+
+    if not _init():
+        return False
+
+    worksheet = _get_or_create_worksheet(
+        table_name,
+        [],
+    )
+
+    if worksheet is None:
+        return False
+
+    try:
+        records = worksheet.get_all_records()
+        headers = worksheet.row_values(1)
+
+        if key_column not in headers:
+            return False
+
+        for row_number, record in enumerate(records, start=2):
+            if str(record.get(key_column, "")).strip() == str(key_value).strip():
+                worksheet.delete_rows(row_number)
+
+                _cache.pop(
+                    table_name,
+                    None,
+                )
+
+                logger.info(
+                    "Google Sheets row deleted successfully: %s",
+                    table_name,
+                )
+
+                return True
+
+        return False
+
+    except Exception as e:
+        logger.exception(
+            "Could not delete row from '%s': %s",
+            table_name,
+            e,
+        )
+
+        return False
+
+    
 
 
 # --------------------------------------------------------------------------

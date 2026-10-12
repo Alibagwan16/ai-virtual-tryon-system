@@ -508,7 +508,7 @@ if IS_ADMIN:
     for shop in sorted(all_shops, key=lambda s: -usage_today.get(s["id"], 0)):
         limit = int(shop.get("daily_limit", 0) or 0)
         used = usage_today.get(shop["id"], 0)
-        cols = st.columns([2, 2, 1, 1])
+        cols = st.columns([2, 2, 1, 1, 1])
         cols[0].markdown(f"**{shop.get('name', shop['id'])}**")
         cols[1].caption(shop["id"])
         cols[2].caption(f"{used} used")
