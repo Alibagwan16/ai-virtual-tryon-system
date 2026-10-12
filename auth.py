@@ -186,59 +186,49 @@ def signup_shop(shop_id: str, name: str, password: str) -> Dict[str, Any]:
     return new_shop
 
 def delete_shop(shop_id: str) -> bool:
-    """Delete a shop from Google Sheets and local shops.json."""
+    """Delete only a signup-created shop."""
 
     shop_id = shop_id.strip()
 
     if not shop_id:
         return False
 
-    # Delete from Google Sheets
+    # First try deleting from Google Sheets.
     sheets_deleted = sheets_db.delete_row(
         "Shops",
         "id",
         shop_id,
     )
 
-    # Delete from local shops.json
+    # Also remove from local shops.json if it exists there.
+    local_deleted = False
+
     with _lock:
         if SHOPS_FILE.exists():
             try:
                 data = json.loads(
-                    SHOPS_FILE.read_text(
-                        encoding="utf-8",
-                    )
+                    SHOPS_FILE.read_text(encoding="utf-8")
                 )
             except Exception:
                 data = {"shops": []}
-        else:
-            data = {"shops": []}
 
-        shops = data.get("shops", [])
+            shops = data.get("shops", [])
 
-        original_count = len(shops)
+            new_shops = [
+                shop
+                for shop in shops
+                if str(shop.get("id", "")).strip() != shop_id
+            ]
 
-        shops = [
-            shop
-            for shop in shops
-            if str(shop.get("id", "")).strip() != shop_id
-        ]
+            if len(new_shops) != len(shops):
+                data["shops"] = new_shops
+                SHOPS_FILE.write_text(
+                    json.dumps(data, indent=2),
+                    encoding="utf-8",
+                )
+                local_deleted = True
 
-        if len(shops) != original_count:
-            data["shops"] = shops
-
-            SHOPS_FILE.write_text(
-                json.dumps(
-                    data,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-
-            return True
-
-    return sheets_deleted
-
+    return sheets_deleted or local_deleted
 
 # --------------------------------------------------------------------------
 # Daily usage tracking
