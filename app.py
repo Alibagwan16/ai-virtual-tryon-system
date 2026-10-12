@@ -591,7 +591,7 @@ else:
             st.rerun()
 
 st.markdown("</div>", unsafe_allow_html=True)
-st.stop()
+
 
 # --------------------------------------------------------------------------
 # Garment types (mirrors the reference "AI trial room" app)
