@@ -506,35 +506,38 @@ if IS_ADMIN:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="card">', unsafe_allow_html=True)
     for shop in sorted(all_shops, key=lambda s: -usage_today.get(s["id"], 0)):
-        limit = int(shop.get("daily_limit", 0) or 0)
-        used = usage_today.get(shop["id"], 0)
-        cols = st.columns([2, 2, 1, 1, 1])
-        cols[0].markdown(f"**{shop.get('name', shop['id'])}**")
-cols[1].caption(shop["id"])
-cols[2].caption(f"{used} used")
-cols[3].caption("∞" if limit < 0 else f"limit {limit}")
+     limit = int(shop.get("daily_limit", 0) or 0)
+    used = usage_today.get(shop["id"], 0)
 
-if cols[4].button(
-    "🗑️ Delete",
-    key=f"delete_shop_{shop['id']}",
-    use_container_width=True,
-):
-    if shop.get("admin"):
-        st.error("Admin shop cannot be deleted.")
-    else:
-        deleted = auth.delete_shop(shop["id"])
+    cols = st.columns([2, 2, 1, 1, 1])
 
-        if deleted:
-            st.success(
-                f"{shop.get('name', shop['id'])} deleted successfully."
-            )
-            st.rerun()
+    cols[0].markdown(f"**{shop.get('name', shop['id'])}**")
+    cols[1].caption(shop["id"])
+    cols[2].caption(f"{used} used")
+    cols[3].caption("∞" if limit < 0 else f"limit {limit}")
+
+    # Individual delete button for every shop
+    if cols[4].button(
+        "🗑️ Delete",
+        key=f"delete_shop_{shop['id']}",
+        use_container_width=True,
+    ):
+        if shop.get("admin"):
+            st.error("Admin shop cannot be deleted.")
         else:
-            st.error("Could not delete this shop.")
+            deleted = auth.delete_shop(shop["id"])
 
-if limit >= 0:
-    st.progress(
-        min(1.0, used / limit) if limit > 0 else 1.0)
+            if deleted:
+                st.success(
+                    f"{shop.get('name', shop['id'])} deleted successfully."
+                )
+                st.rerun()
+            else:
+                st.error("Could not delete this shop.")
+
+    if limit >= 0:
+        st.progress(
+            min(1.0, used / limit) if used > 0 else 0.0)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ----------------------------------------------------------------
